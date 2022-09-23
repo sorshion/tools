@@ -6,7 +6,7 @@
 
 // 数据库配置
 $config = [
-    'host'     => '127.00.1',
+    'host'     => '127.0.0.1',
     'user'     => 'root',
     'password' => '',
 ];
@@ -22,8 +22,27 @@ function characet($data)
     return $data;
 }
 
+function describe()
+{
+    return '本数据字典由PHP脚本自动导出，字典的备注来自数据库表及其字段的注释(`comment`)，开发者在增改库表及其字段时，请在 `migration` 时写明注释,以备后来者查阅。';
+}
+
+/**
+ * 重写fputcsv方法，添加转码功能
+ */
+function fputcsv2($handle, array $fields, $delimiter = ",", $enclosure = '"', $escape_char = "\\")
+{
+    foreach ($fields as $k => $v) {
+        $v = "\t" . $v;// 防止科学计数和日期格式被转义
+        $fields[$k] = iconv("UTF-8", "GB2312//IGNORE", $v);  // 这里将UTF-8转为GB2312编码
+    }
+
+    fputcsv($handle, $fields, $delimiter, $enclosure, $escape_char);
+}
+
 function export_dict($dbname, $config)
 {
+    $csvData = [];
     $title = $dbname . ' 数据字典';
     $dsn = 'mysql:dbname=' . $dbname . ';host=' . $config['host'];
     //数据库连接
@@ -66,7 +85,7 @@ function export_dict($dbname, $config)
 
     $mark = '';
 
-    //循环所有表
+    //循环所有表(md格式)
     foreach ($_tables as $k => $v) {
         $mark .= '## ' . $v['TABLE_NAME'] . '  ' . characet($v['TABLE_COMMENT']) . PHP_EOL;
         $mark .= '' . PHP_EOL;
@@ -78,10 +97,24 @@ function export_dict($dbname, $config)
         $mark .= '' . PHP_EOL;
     }
 
+    $describe = describe();
+
+    $csvData[] = [$title];
+    $csvData[] = [$describe];
+    $csvData[] = [];
+    foreach ($_tables as $k => $v) {
+        $csvData[] = [$v['TABLE_NAME'] . '  ' . characet($v['TABLE_COMMENT'])];
+        $csvData[] = ['字段名', '数据类型', '默认值', '允许非空', '自动递增', '备注'];
+        foreach ($v['COLUMN'] as $f) {
+            $csvData[] = [$f['COLUMN_NAME'], $f['COLUMN_TYPE'],  $f['COLUMN_DEFAULT'], $f['IS_NULLABLE'],  ($f['EXTRA'] == 'auto_increment' ? '是' : ''),  (empty($f['COLUMN_COMMENT']) ? '-' : str_replace('|', '/', $f['COLUMN_COMMENT']))];
+        }
+        $csvData[] = [];
+    }
+
     //markdown输出
     $md_tplt = <<<EOT
 # {$title}
->   本数据字典由PHP脚本自动导出,字典的备注来自数据库表及其字段的注释(`comment`).开发者在增改库表及其字段时,请在 `migration` 时写明注释,以备后来者查阅.
+>   {$describe}
 
 {$mark}
 EOT;
@@ -143,10 +176,15 @@ EOT;
 
     file_put_contents($dbname . '.md', $md_tplt);
     file_put_contents($dbname . '.html', $html_tplt);
+
+    $fp = fopen($dbname . '.csv', 'a');
+    foreach ($csvData as $row) {
+        fputcsv2($fp, $row);
+    }
+    fclose($fp);
 }
 
 $dbs = ['testdb'];
 foreach ($dbs as $db) {
     export_dict($db, $config);
 }
-
